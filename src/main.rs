@@ -3,14 +3,14 @@ use std::time::{Duration, Instant};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
-    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
+    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     layout::{Constraint, Layout, Margin, Offset, Rect, Size},
     style::{Color, Modifier, Style, Stylize},
     symbols,
     text::{Line, Span},
     widgets::{
-        Axis, Block, BorderType, Borders, Chart, Dataset, List, ListItem, ListState, Paragraph,
-        StatefulWidget, Widget, Wrap,
+        Axis, Block, BorderType, Borders, Cell, Chart, Dataset, List, ListItem, ListState,
+        Paragraph, Row, StatefulWidget, Table, Widget, Wrap,
     },
 };
 use ratatui_circle_gauge::CircleGauge;
@@ -71,13 +71,6 @@ fn main() -> eyre::Result<()> {
     app_result
 }
 
-#[derive(Default)]
-enum Focus {
-    Menu,
-    #[default]
-    Content,
-}
-
 struct App {
     menu_state: ListState,
     show_menu: bool,
@@ -94,10 +87,11 @@ struct App {
     node_net_down_signal: SinSignal,
     node_net_down_data: Vec<(f64, f64)>,
     window: [f64; 2],
-    focus: Focus,
     image: ratatui_image::protocol::Protocol,
     tx_logs: Vec<(&'static str, &'static str)>,
     mpc_logs: Vec<(&'static str, &'static str)>,
+    search_state: TextboxState,
+    search_focused: bool,
 }
 
 impl App {
@@ -145,10 +139,14 @@ impl App {
             node_net_down_signal,
             node_net_down_data,
             window: [0.0, 20.0],
-            focus: Focus::default(),
             image,
             tx_logs: TXS_LOGS.to_vec(),
             mpc_logs: MPC_LOGS.to_vec(),
+            search_state: TextboxState {
+                hint_text: Some(" Search...".to_string()),
+                ..Default::default()
+            },
+            search_focused: false,
         })
     }
     fn run(mut self, mut terminal: DefaultTerminal) -> eyre::Result<()> {
@@ -174,31 +172,50 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return;
         }
+
+        // search box key handling
+        if self.search_focused {
+            match key.code {
+                KeyCode::Enter => {
+                    // TODO search
+                }
+                KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => {
+                    self.search_focused = false;
+                }
+                _ => {
+                    self.search_state.handle_events(key.code, key.modifiers);
+                }
+            }
+            return;
+        }
+
+        // fall through to general key handling
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_exit = true,
             KeyCode::Char('m') => self.show_menu = !self.show_menu,
-            KeyCode::Char('j') | KeyCode::Down => match self.focus {
-                Focus::Menu => self.menu_state.select_next(),
-                Focus::Content => match self.menu_state.selected() {
-                    Some(0) => self.intro_scroll_view_state.scroll_down(),
-                    Some(1) => self.dashboard_scroll_view_state.scroll_down(),
-                    Some(2) => self.wallet_scroll_view_state.scroll_down(),
-                    _ => unreachable!(),
-                },
+            KeyCode::Char('j') | KeyCode::Down => match self.menu_state.selected() {
+                Some(0) => self.intro_scroll_view_state.scroll_down(),
+                Some(1) => self.dashboard_scroll_view_state.scroll_down(),
+                Some(2) => self.wallet_scroll_view_state.scroll_down(),
+                _ => unreachable!(),
             },
-            KeyCode::Char('k') | KeyCode::Up => match self.focus {
-                Focus::Menu => self.menu_state.select_previous(),
-                Focus::Content => match self.menu_state.selected() {
-                    Some(0) => self.intro_scroll_view_state.scroll_up(),
-                    Some(1) => self.dashboard_scroll_view_state.scroll_up(),
-                    Some(2) => self.wallet_scroll_view_state.scroll_up(),
-                    _ => unreachable!(),
-                },
+            KeyCode::Char('k') | KeyCode::Up => match self.menu_state.selected() {
+                Some(0) => self.intro_scroll_view_state.scroll_up(),
+                Some(1) => self.dashboard_scroll_view_state.scroll_up(),
+                Some(2) => self.wallet_scroll_view_state.scroll_up(),
+                _ => unreachable!(),
             },
-            KeyCode::Tab => match self.focus {
-                Focus::Menu => self.focus = Focus::Content,
-                Focus::Content => self.focus = Focus::Menu,
-            },
+            KeyCode::Char('s') | KeyCode::Char('f') => {
+                if self.menu_state.selected() == Some(2) {
+                    self.search_focused = true;
+                }
+            }
+            KeyCode::Tab => {
+                self.menu_state.select_next();
+            }
+            KeyCode::BackTab => {
+                self.menu_state.select_previous();
+            }
             _ => {}
         }
     }
@@ -252,7 +269,7 @@ impl App {
         match self.menu_state.selected() {
             Some(0) => self.render_intro(content, buf),
             Some(1) => self.render_dashboard(content, buf),
-            Some(2) => self.render_dashboard(content, buf),
+            Some(2) => self.render_wallets(content, buf),
             _ => {}
         }
     }
@@ -265,10 +282,12 @@ impl App {
     }
 
     fn render_menu(&mut self, area: Rect, buf: &mut Buffer) {
-        let list = List::new(["  Introduction", "  Dashboard", "  Wallets"])
-            .highlight_style(SELECTED_STYLE);
-        // We need to disambiguate this trait method as both `Widget` and `StatefulWidget` share the
-        // same method name `render`.
+        let list = List::new([
+            "\t\n   Introduction\n\t",
+            "\t\n   Dashboard\n\t",
+            "\t\n   Wallets\n\t",
+        ])
+        .highlight_style(SELECTED_STYLE);
         StatefulWidget::render(list, area, buf, &mut self.menu_state);
     }
 
@@ -374,7 +393,7 @@ impl App {
         .wrap(Wrap::default())
         .render(net_stats_left_top, buf);
         CircleGauge::default()
-            .ratio(0.25)
+            .ratio(((self.tx_throughput_data.last().unwrap().1 + 10.0) / 20.0).clamp(0.0, 1.0))
             .stroke(5.0)
             .fill_style(Style::new().fg(ACCENT_COLOR))
             .empty_style(Style::new().dark_gray())
@@ -613,6 +632,93 @@ impl App {
             .hidden_legend_constraints((Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)))
     }
 
+    fn render_wallets(&mut self, area: Rect, buf: &mut Buffer) {
+        let mut scroll_view = ScrollView::new(Size::new(area.width, 75))
+            .vertical_scrollbar_visibility(tui_scrollview::ScrollbarVisibility::Automatic)
+            .horizontal_scrollbar_visibility(tui_scrollview::ScrollbarVisibility::Never);
+        let scroll_view_area = area;
+        let scroll_view_buf = buf;
+        let mut area = *scroll_view.buf().area();
+        area.width -= 2; // Adjust for scrollbar
+        let buf = scroll_view.buf_mut();
+
+        let [txs_area, title_area, search_area, table_area] = Layout::vertical([
+            Constraint::Length(12),
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Fill(1),
+        ])
+        .areas(area);
+        let [search_area] = Layout::horizontal([Constraint::Max(50)]).areas(search_area);
+
+        self.render_txs_throughput_card(txs_area, buf);
+
+        Paragraph::new(vec![
+            Line::raw(""),
+            Line::styled("Wallets", Style::new().bold()),
+        ])
+        .render(title_area, buf);
+
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .render(search_area, buf);
+        let search_textbox = Textbox::default().render_cursor(self.search_focused);
+        StatefulWidget::render(
+            search_textbox,
+            search_area.inner(Margin::new(1, 1)),
+            buf,
+            &mut self.search_state,
+        );
+
+        let header = ["Wallet", "Last Transfer", "Transferred Amount", "Balance"]
+            .into_iter()
+            .map(Cell::from)
+            .collect::<Row>()
+            .style(Style::new().fg(Color::DarkGray))
+            .top_margin(1)
+            .height(3);
+        let rows = (0..20)
+            .map(|i| {
+                let wallet = format!("0x1234...{:04x}", i);
+                let last_transfer = format!("2024-09-{:02} 12:34:56", i + 1);
+                let transferred_amount = Line::default().spans([
+                    Span::raw(format!("{}\t\t\t", (i + 1) * 1000)),
+                    Span::styled(" ", Style::default().fg(ACCENT_COLOR)),
+                ]);
+                let balance = Line::default().spans([
+                    Span::raw(format!("{}\t\t\t", (20 - i) * 5000)),
+                    Span::styled(" ", Style::default().fg(ACCENT_COLOR)),
+                ]);
+                Row::new(vec![
+                    Cell::from(wallet),
+                    Cell::from(last_transfer),
+                    Cell::from(transferred_amount),
+                    Cell::from(balance),
+                ])
+                .top_margin(1)
+                .height(3)
+            })
+            .collect::<Vec<Row>>();
+        let widths = [
+            Constraint::Percentage(25),
+            Constraint::Percentage(35),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
+        ];
+
+        let table = Table::new(rows, widths)
+            .header(header)
+            .block(Block::bordered().border_type(BorderType::Rounded));
+
+        Widget::render(table, table_area, buf);
+
+        scroll_view.render(
+            scroll_view_area,
+            scroll_view_buf,
+            &mut self.wallet_scroll_view_state,
+        );
+    }
+
     fn txs_logs(&self) -> impl Widget {
         let logs: Vec<ListItem> = self
             .tx_logs
@@ -684,5 +790,133 @@ impl Iterator for SinSignal {
         let point = (self.x, (self.x * 1.0 / self.period).sin() * self.scale);
         self.x += self.interval;
         Some(point)
+    }
+}
+
+#[derive(Default)]
+pub struct Textbox {
+    style: Style,
+    hint_style: Style,
+    render_cursor: bool,
+}
+
+impl Textbox {
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = style;
+        self
+    }
+
+    pub fn hint_style(mut self, hint_style: Style) -> Self {
+        self.hint_style = hint_style;
+        self
+    }
+
+    pub fn render_cursor(mut self, render: bool) -> Self {
+        self.render_cursor = render;
+        self
+    }
+}
+
+pub struct TextboxState {
+    pub cursor_pos: usize,
+    pub text: String,
+    pub hint_text: Option<String>,
+    start: usize,
+}
+
+impl Default for TextboxState {
+    fn default() -> Self {
+        Self {
+            cursor_pos: Default::default(),
+            text: Default::default(),
+            hint_text: Some("<hint text>".to_string()),
+            start: 0,
+        }
+    }
+}
+
+impl TextboxState {
+    pub fn handle_events(&mut self, key_code: KeyCode, key_modifiers: KeyModifiers) {
+        match (key_code, key_modifiers) {
+            (KeyCode::Left, _) => {
+                self.cursor_pos = if self.cursor_pos > 0 {
+                    self.cursor_pos - 1
+                } else {
+                    self.cursor_pos
+                };
+            }
+            (KeyCode::Right, _) => {
+                self.cursor_pos = if self.cursor_pos < self.text.len() {
+                    self.cursor_pos + 1
+                } else {
+                    self.text.len()
+                };
+            }
+            (KeyCode::Backspace, _) => {
+                if self.cursor_pos > 0 {
+                    self.cursor_pos = std::cmp::max(self.cursor_pos - 1, 0);
+                    self.text.remove(self.cursor_pos);
+                }
+            }
+            (KeyCode::Delete, _) => {
+                if self.cursor_pos < self.text.len() {
+                    self.text.remove(self.cursor_pos);
+
+                    if self.cursor_pos == self.text.len() && !self.text.is_empty() {
+                        self.cursor_pos -= 1;
+                    }
+                }
+            }
+            (KeyCode::Char(x), _) => {
+                self.text.insert(self.cursor_pos, x);
+                self.cursor_pos += 1;
+            }
+            (_, _) => {}
+        }
+    }
+}
+
+impl StatefulWidget for Textbox {
+    type State = TextboxState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        buf.set_style(area, self.style);
+        if !state.text.is_empty() {
+            let w = usize::from(area.width) - 1;
+            if state.cursor_pos > state.start + w {
+                state.start = state.cursor_pos - w;
+            };
+
+            if state.cursor_pos < state.start {
+                state.start = state.cursor_pos;
+            }
+
+            let end = std::cmp::min(state.start + w + 1, state.text.len());
+
+            let visible_text = &state.text[state.start..end];
+            buf.set_string(area.x, area.y, visible_text, self.style);
+        } else if let Some(hint) = state.hint_text.as_ref() {
+            buf.set_string(area.x, area.y, hint, self.hint_style);
+        }
+
+        if self.render_cursor && !state.text.is_empty() {
+            let pos_char = state
+                .text
+                .chars()
+                .nth(state.cursor_pos)
+                .or(state
+                    .hint_text
+                    .as_ref()
+                    .and_then(|s| s.chars().nth(state.cursor_pos)))
+                .unwrap_or(' ');
+            let cur_pos = u16::try_from(state.cursor_pos.saturating_sub(state.start)).unwrap_or(0);
+
+            buf.set_string(
+                area.x + cur_pos,
+                area.y,
+                format!("{}", &pos_char),
+                self.style.add_modifier(Modifier::REVERSED),
+            );
+        }
     }
 }
