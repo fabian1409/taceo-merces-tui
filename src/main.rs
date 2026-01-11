@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use ratatui::{
     DefaultTerminal, Frame,
     buffer::Buffer,
-    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
     layout::{Constraint, Layout, Margin, Offset, Rect, Size},
     style::{Color, Modifier, Style, Stylize},
     symbols,
@@ -15,7 +15,13 @@ use ratatui::{
 };
 use ratatui_circle_gauge::CircleGauge;
 use ratatui_image::{Resize, picker::Picker};
+use taceo_merces_tui::{
+    layout::{LayoutBuilder, Node},
+    text_input::{TextInput, TextInputState},
+};
 use tui_scrollview::{ScrollView, ScrollViewState};
+
+const LARGE_MIN: u16 = 120;
 
 const ACCENT_COLOR: Color = Color::Indexed(122);
 
@@ -90,7 +96,7 @@ struct App {
     image: ratatui_image::protocol::Protocol,
     tx_logs: Vec<(&'static str, &'static str)>,
     mpc_logs: Vec<(&'static str, &'static str)>,
-    search_state: TextboxState,
+    search_state: TextInputState,
     search_focused: bool,
 }
 
@@ -142,10 +148,7 @@ impl App {
             image,
             tx_logs: TXS_LOGS.to_vec(),
             mpc_logs: MPC_LOGS.to_vec(),
-            search_state: TextboxState {
-                hint_text: Some(" Search...".to_string()),
-                ..Default::default()
-            },
+            search_state: TextInputState::default().hint_text(" Search..."),
             search_focused: false,
         })
     }
@@ -193,18 +196,22 @@ impl App {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.should_exit = true,
             KeyCode::Char('m') => self.show_menu = !self.show_menu,
-            KeyCode::Char('j') | KeyCode::Down => match self.menu_state.selected() {
-                Some(0) => self.intro_scroll_view_state.scroll_down(),
-                Some(1) => self.dashboard_scroll_view_state.scroll_down(),
-                Some(2) => self.wallet_scroll_view_state.scroll_down(),
-                _ => unreachable!(),
-            },
-            KeyCode::Char('k') | KeyCode::Up => match self.menu_state.selected() {
-                Some(0) => self.intro_scroll_view_state.scroll_up(),
-                Some(1) => self.dashboard_scroll_view_state.scroll_up(),
-                Some(2) => self.wallet_scroll_view_state.scroll_up(),
-                _ => unreachable!(),
-            },
+            KeyCode::Char('j') | KeyCode::Down | KeyCode::PageDown => {
+                match self.menu_state.selected() {
+                    Some(0) => self.intro_scroll_view_state.scroll_down(),
+                    Some(1) => self.dashboard_scroll_view_state.scroll_down(),
+                    Some(2) => self.wallet_scroll_view_state.scroll_down(),
+                    _ => unreachable!(),
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up | KeyCode::PageUp => {
+                match self.menu_state.selected() {
+                    Some(0) => self.intro_scroll_view_state.scroll_up(),
+                    Some(1) => self.dashboard_scroll_view_state.scroll_up(),
+                    Some(2) => self.wallet_scroll_view_state.scroll_up(),
+                    _ => unreachable!(),
+                }
+            }
             KeyCode::Char('s') | KeyCode::Char('f') => {
                 if self.menu_state.selected() == Some(2) {
                     self.search_focused = true;
@@ -489,7 +496,12 @@ impl App {
     }
 
     fn render_dashboard(&mut self, area: Rect, buf: &mut Buffer) {
-        let mut scroll_view = ScrollView::new(Size::new(area.width, 90))
+        let height = if area.width >= LARGE_MIN {
+            15 + 4 + 30 + 3 + 20
+        } else {
+            15 + 4 + 25 + 30 + 3 + 20 + 20
+        };
+        let mut scroll_view = ScrollView::new(Size::new(area.width, height))
             .vertical_scrollbar_visibility(tui_scrollview::ScrollbarVisibility::Automatic)
             .horizontal_scrollbar_visibility(tui_scrollview::ScrollbarVisibility::Never);
         let scroll_view_area = area;
@@ -498,64 +510,92 @@ impl App {
         area.width -= 2; // Adjust for scrollbar
         let buf = scroll_view.buf_mut();
 
-        let [
-            txs_area,
-            net_stats_title,
-            net_stats_area,
-            net_stats_values_area,
-            live_logs_title,
-            txs_logs_area,
-            mpc_logs_area,
-        ] = Layout::vertical([
-            Constraint::Length(12),
-            Constraint::Length(4),
-            Constraint::Length(25),
-            Constraint::Length(12),
-            Constraint::Length(3),
-            Constraint::Length(15),
-            Constraint::Length(15),
-        ])
-        .areas(area);
+        let layout = if area.width >= LARGE_MIN {
+            LayoutBuilder::new()
+                .child(
+                    Node::vertical()
+                        .child(Node::leaf("txs_graph").constraint(Constraint::Length(15)))
+                        .child(Node::leaf("net_stats_title").constraint(Constraint::Length(4)))
+                        .child(
+                            Node::horizontal()
+                                .spacing(1)
+                                .child(
+                                    Node::leaf("net_stats_gauge")
+                                        .constraint(Constraint::Percentage(25)),
+                                )
+                                .child(
+                                    Node::leaf("net_stats_graph")
+                                        .constraint(Constraint::Percentage(50)),
+                                )
+                                .child(
+                                    Node::vertical()
+                                        .child("net_stats_values_0")
+                                        .child("net_stats_values_1")
+                                        .child("net_stats_values_2")
+                                        .constraint(Constraint::Percentage(25)),
+                                )
+                                .constraint(Constraint::Length(30)),
+                        )
+                        .child(Node::leaf("live_logs_title").constraint(Constraint::Length(3)))
+                        .child(
+                            Node::horizontal()
+                                .spacing(1)
+                                .child("txs_logs")
+                                .child("mpc_logs")
+                                .constraint(Constraint::Length(20)),
+                        ),
+                )
+                .build(area)
+        } else {
+            LayoutBuilder::new()
+                .child(
+                    Node::vertical()
+                        .child(Node::leaf("txs_graph").constraint(Constraint::Length(15)))
+                        .child(Node::leaf("net_stats_title").constraint(Constraint::Length(4)))
+                        .child(Node::leaf("net_stats_graph").constraint(Constraint::Length(25)))
+                        .child(
+                            Node::horizontal()
+                                .spacing(1)
+                                .child("net_stats_gauge")
+                                .child(
+                                    Node::vertical()
+                                        .child("net_stats_values_0")
+                                        .child("net_stats_values_1")
+                                        .child("net_stats_values_2"),
+                                )
+                                .constraint(Constraint::Length(30)),
+                        )
+                        .child(Node::leaf("live_logs_title").constraint(Constraint::Length(3)))
+                        .child(Node::leaf("txs_logs").constraint(Constraint::Length(20)))
+                        .child(Node::leaf("mpc_logs").constraint(Constraint::Length(20))),
+                )
+                .build(area)
+        };
 
-        self.render_txs_throughput_card(txs_area, buf);
+        self.render_txs_throughput_card(layout["txs_graph"], buf);
 
         Paragraph::new(vec![
             Line::raw(""),
             Line::styled("Network Stats", Style::new().bold()),
             Line::raw("Updated less than 10 seconds ago"),
         ])
-        .render(net_stats_title, buf);
+        .render(layout["net_stats_title"], buf);
 
-        let [net_stats_left, net_stats_right] =
-            Layout::horizontal([Constraint::Percentage(25), Constraint::Percentage(75)])
-                .areas(net_stats_area);
+        self.render_net_util_card(layout["net_stats_gauge"], buf);
+        self.render_nodes_util_card(layout["net_stats_graph"], buf);
 
-        self.render_net_util_card(net_stats_left, buf);
-        self.render_nodes_util_card(net_stats_right, buf);
-
-        let [
-            net_stats_values_left,
-            net_stats_values_mid,
-            net_stats_values_right,
-        ] = Layout::horizontal([
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-        ])
-        .areas(net_stats_values_area);
-
-        self.render_net_stats_values_card_0(net_stats_values_left, buf);
-        self.render_net_stats_values_card_1(net_stats_values_mid, buf);
-        self.render_net_stats_values_card_2(net_stats_values_right, buf);
+        self.render_net_stats_values_card_0(layout["net_stats_values_0"], buf);
+        self.render_net_stats_values_card_1(layout["net_stats_values_1"], buf);
+        self.render_net_stats_values_card_2(layout["net_stats_values_2"], buf);
 
         Paragraph::new(vec![
             Line::raw(""),
             Line::styled("Live Logs", Style::new().bold()),
         ])
-        .render(live_logs_title, buf);
+        .render(layout["live_logs_title"], buf);
 
-        self.txs_logs().render(txs_logs_area, buf);
-        self.mpc_logs().render(mpc_logs_area, buf);
+        self.render_txs_logs_card(layout["txs_logs"], buf);
+        self.render_mpc_logs_card(layout["mpc_logs"], buf);
 
         scroll_view.render(
             scroll_view_area,
@@ -629,7 +669,7 @@ impl App {
                     .labels(["-20".bold(), "0".into(), "20".bold()])
                     .bounds([-20.0, 20.0]),
             )
-            .hidden_legend_constraints((Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)))
+            .hidden_legend_constraints((Constraint::Ratio(1, 2), Constraint::Min(0)))
     }
 
     fn render_wallets(&mut self, area: Rect, buf: &mut Buffer) {
@@ -643,7 +683,7 @@ impl App {
         let buf = scroll_view.buf_mut();
 
         let [txs_area, title_area, search_area, table_area] = Layout::vertical([
-            Constraint::Length(12),
+            Constraint::Length(15),
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Fill(1),
@@ -662,7 +702,7 @@ impl App {
         Block::bordered()
             .border_type(BorderType::Rounded)
             .render(search_area, buf);
-        let search_textbox = Textbox::default().render_cursor(self.search_focused);
+        let search_textbox = TextInput::default().render_cursor(self.search_focused);
         StatefulWidget::render(
             search_textbox,
             search_area.inner(Margin::new(1, 1)),
@@ -680,7 +720,7 @@ impl App {
         let rows = (0..20)
             .map(|i| {
                 let wallet = format!("0x1234...{:04x}", i);
-                let last_transfer = format!("2024-09-{:02} 12:34:56", i + 1);
+                let last_transfer = format!("2024/09/{:02} 12:34", i + 1);
                 let transferred_amount = Line::default().spans([
                     Span::raw(format!("{}\t\t\t", (i + 1) * 1000)),
                     Span::styled(" ", Style::default().fg(ACCENT_COLOR)),
@@ -700,10 +740,10 @@ impl App {
             })
             .collect::<Vec<Row>>();
         let widths = [
-            Constraint::Percentage(25),
-            Constraint::Percentage(35),
-            Constraint::Percentage(20),
-            Constraint::Percentage(20),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
+            Constraint::Fill(1),
         ];
 
         let table = Table::new(rows, widths)
@@ -719,7 +759,16 @@ impl App {
         );
     }
 
-    fn txs_logs(&self) -> impl Widget {
+    fn render_txs_logs_card(&mut self, area: Rect, buf: &mut Buffer) {
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .render(area, buf);
+
+        let [top, bot] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)])
+            .spacing(1)
+            .areas(area.inner(Margin::new(1, 1)));
+        Line::styled("Transaction Logs", Style::new().bold()).render(top, buf);
+
         let logs: Vec<ListItem> = self
             .tx_logs
             .iter()
@@ -731,14 +780,20 @@ impl App {
                 ListItem::new(content)
             })
             .collect();
-        List::new(logs).block(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title("Transaction Log"),
-        )
+        let list = List::new(logs);
+        Widget::render(list, bot, buf);
     }
 
-    fn mpc_logs(&self) -> impl Widget {
+    fn render_mpc_logs_card(&mut self, area: Rect, buf: &mut Buffer) {
+        Block::bordered()
+            .border_type(BorderType::Rounded)
+            .render(area, buf);
+
+        let [top, bot] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)])
+            .spacing(1)
+            .areas(area.inner(Margin::new(1, 1)));
+        Line::styled("MPC Logs", Style::new().bold()).render(top, buf);
+
         let logs: Vec<ListItem> = self
             .mpc_logs
             .iter()
@@ -757,11 +812,8 @@ impl App {
                 ListItem::new(content)
             })
             .collect();
-        List::new(logs).block(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .title("MPC Log"),
-        )
+        let list = List::new(logs);
+        Widget::render(list, bot, buf);
     }
 }
 
@@ -790,133 +842,5 @@ impl Iterator for SinSignal {
         let point = (self.x, (self.x * 1.0 / self.period).sin() * self.scale);
         self.x += self.interval;
         Some(point)
-    }
-}
-
-#[derive(Default)]
-pub struct Textbox {
-    style: Style,
-    hint_style: Style,
-    render_cursor: bool,
-}
-
-impl Textbox {
-    pub fn style(mut self, style: Style) -> Self {
-        self.style = style;
-        self
-    }
-
-    pub fn hint_style(mut self, hint_style: Style) -> Self {
-        self.hint_style = hint_style;
-        self
-    }
-
-    pub fn render_cursor(mut self, render: bool) -> Self {
-        self.render_cursor = render;
-        self
-    }
-}
-
-pub struct TextboxState {
-    pub cursor_pos: usize,
-    pub text: String,
-    pub hint_text: Option<String>,
-    start: usize,
-}
-
-impl Default for TextboxState {
-    fn default() -> Self {
-        Self {
-            cursor_pos: Default::default(),
-            text: Default::default(),
-            hint_text: Some("<hint text>".to_string()),
-            start: 0,
-        }
-    }
-}
-
-impl TextboxState {
-    pub fn handle_events(&mut self, key_code: KeyCode, key_modifiers: KeyModifiers) {
-        match (key_code, key_modifiers) {
-            (KeyCode::Left, _) => {
-                self.cursor_pos = if self.cursor_pos > 0 {
-                    self.cursor_pos - 1
-                } else {
-                    self.cursor_pos
-                };
-            }
-            (KeyCode::Right, _) => {
-                self.cursor_pos = if self.cursor_pos < self.text.len() {
-                    self.cursor_pos + 1
-                } else {
-                    self.text.len()
-                };
-            }
-            (KeyCode::Backspace, _) => {
-                if self.cursor_pos > 0 {
-                    self.cursor_pos = std::cmp::max(self.cursor_pos - 1, 0);
-                    self.text.remove(self.cursor_pos);
-                }
-            }
-            (KeyCode::Delete, _) => {
-                if self.cursor_pos < self.text.len() {
-                    self.text.remove(self.cursor_pos);
-
-                    if self.cursor_pos == self.text.len() && !self.text.is_empty() {
-                        self.cursor_pos -= 1;
-                    }
-                }
-            }
-            (KeyCode::Char(x), _) => {
-                self.text.insert(self.cursor_pos, x);
-                self.cursor_pos += 1;
-            }
-            (_, _) => {}
-        }
-    }
-}
-
-impl StatefulWidget for Textbox {
-    type State = TextboxState;
-
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        buf.set_style(area, self.style);
-        if !state.text.is_empty() {
-            let w = usize::from(area.width) - 1;
-            if state.cursor_pos > state.start + w {
-                state.start = state.cursor_pos - w;
-            };
-
-            if state.cursor_pos < state.start {
-                state.start = state.cursor_pos;
-            }
-
-            let end = std::cmp::min(state.start + w + 1, state.text.len());
-
-            let visible_text = &state.text[state.start..end];
-            buf.set_string(area.x, area.y, visible_text, self.style);
-        } else if let Some(hint) = state.hint_text.as_ref() {
-            buf.set_string(area.x, area.y, hint, self.hint_style);
-        }
-
-        if self.render_cursor && !state.text.is_empty() {
-            let pos_char = state
-                .text
-                .chars()
-                .nth(state.cursor_pos)
-                .or(state
-                    .hint_text
-                    .as_ref()
-                    .and_then(|s| s.chars().nth(state.cursor_pos)))
-                .unwrap_or(' ');
-            let cur_pos = u16::try_from(state.cursor_pos.saturating_sub(state.start)).unwrap_or(0);
-
-            buf.set_string(
-                area.x + cur_pos,
-                area.y,
-                format!("{}", &pos_char),
-                self.style.add_modifier(Modifier::REVERSED),
-            );
-        }
     }
 }

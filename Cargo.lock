@@ -1608,7 +1608,7 @@ dependencies = [
 [[package]]
 name = "ratatui-circle-gauge"
 version = "0.1.0"
-source = "git+https://github.com/fabian1409/ratatui-circle-gauge.git?rev=6145870#61458702092d34bac45df987a3221822e145ce0b"
+source = "git+https://github.com/fabian1409/ratatui-circle-gauge.git?rev=4b142fd#4b142fdf4ad918aada23979788f40890f993c02c"
 dependencies = [
  "ratatui-core",
 ]
