@@ -1,0 +1,10 @@
+pub mod avg_proof_time;
+pub mod avg_tx_latency;
+pub mod mpc_log;
+pub mod network_util;
+pub mod node_util;
+pub mod text_input;
+pub mod total_txs;
+pub mod txs_log;
+pub mod txs_per_second;
+pub mod wallets_table;
